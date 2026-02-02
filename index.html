@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Git-Based Meeting Scheduler</title>
+    <style>
+        :root { --primary: #0969da; --bg: #0d1117; --card: #161b22; --text: #c9d1d9; --border: #30363d; --success: #238636; --danger: #da3633; --warn: #d29922; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); padding: 20px; line-height: 1.5; }
+        .container { max-width: 900px; margin: 0 auto; }
+        a { color: #58a6ff; text-decoration: none; }
+        .card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 24px; margin-bottom: 24px; }
+        
+        /* Inputs & Buttons */
+        input, select { background: #0d1117; border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; width: 100%; box-sizing: border-box; margin-bottom: 10px; }
+        button { background: var(--primary); color: white; border: 1px solid rgba(240,246,252,0.1); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; }
+        button:hover { opacity: 0.9; }
+        button.secondary { background: #21262d; color: #c9d1d9; border-color: var(--border); }
+        button.copy-btn { background: var(--success); }
+        
+        /* Layouts */
+        .flex-row { display: flex; gap: 10px; align-items: center; }
+        .slot-row { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding: 12px 0; }
+        
+        /* Voting Buttons */
+        .vote-group { display: flex; gap: 4px; }
+        .vote-opt { padding: 4px 12px; border: 1px solid var(--border); background: #21262d; color: #8b949e; cursor: pointer; border-radius: 4px; }
+        .vote-opt:hover { background: #30363d; }
+        .vote-opt.active[data-val="2"] { background: var(--success); color: white; border-color: var(--success); }
+        .vote-opt.active[data-val="1"] { background: var(--warn); color: white; border-color: var(--warn); }
+        .vote-opt.active[data-val="0"] { background: var(--danger); color: white; border-color: var(--danger); }
+
+        /* Heatmap */
+        .score-box { font-size: 1.25rem; font-weight: bold; padding: 4px 12px; border-radius: 20px; min-width: 40px; text-align: center; }
+        .high-score { background: rgba(35, 134, 54, 0.4); color: #7ee787; border: 1px solid rgba(35, 134, 54, 1); }
+        .med-score { background: rgba(210, 153, 34, 0.4); color: #d29922; border: 1px solid rgba(210, 153, 34, 1); }
+        .low-score { background: rgba(218, 54, 51, 0.4); color: #ff7b72; border: 1px solid rgba(218, 54, 51, 1); }
+
+        /* Code Block for Copying */
+        .code-block { font-family: ui-monospace, SFMono-Regular, monospace; background: #0d1117; padding: 12px; border-radius: 6px; border: 1px solid var(--border); overflow-x: auto; margin: 10px 0; font-size: 0.85em; color: #8b949e; }
+        
+        .setup-guide { background: #1f2937; border-left: 4px solid #58a6ff; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div id="setup-ui" class="card setup-guide hidden">
+        <h2 style="margin-top:0">⚙️ First Time Setup</h2>
+        <p>To use this page, you need to point it to a GitHub Issue that acts as the database.</p>
+        <div class="flex-row">
+            <input type="text" id="repo-input" placeholder="username/repo (e.g. jasonl/scheduler)">
+            <input type="number" id="issue-input" placeholder="Issue # (e.g. 1)" style="width: 100px;">
+        </div>
+        <button onclick="saveConfig()">Load Meeting</button>
+        <p style="font-size: 0.85em; color: #8b949e; margin-top: 10px;">
+            <strong>Tip:</strong> Create a new Issue in your repo. Paste the JSON config (generated below) into the Issue body.
+        </p>
+        <button class="secondary" onclick="toggleCreator()">Show Config Generator</button>
+    </div>
+
+    <div id="creator-ui" class="card hidden">
+        <h3>🛠️ Config Generator</h3>
+        <p>1. Pick your times below.<br>2. Copy the JSON.<br>3. Paste it into the body of a new GitHub Issue.</p>
+        <div class="flex-row">
+            <input type="datetime-local" id="new-slot-picker">
+            <button onclick="addSlot()">Add</button>
+        </div>
+        <ul id="new-slot-list" style="list-style: none; padding: 0;"></ul>
+        <div class="code-block" id="json-output">JSON will appear here...</div>
+        <button class="copy-btn" onclick="copyConfig()">Copy JSON to Clipboard</button>
+    </div>
+
+    <div id="meeting-ui" class="hidden">
+        <div class="card">
+            <h1 id="m-title">Loading...</h1>
+            <p style="color: #8b949e;">
+                <span id="m-author"></span> • 
+                <a id="issue-link" href="#" target="_blank">View on GitHub</a> • 
+                Times shown in <strong><script>document.write(Intl.DateTimeFormat().resolvedOptions().timeZone)</script></strong>
+            </p>
+            <div id="heatmap-list"></div>
+        </div>
+
+        <div class="card">
+            <h2>🗳️ Cast Your Vote</h2>
+            <input type="text" id="voter-name" placeholder="Your Name" style="margin-bottom: 20px;">
+            <div id="voting-list"></div>
+            
+            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border);">
+                <h3>How to Submit</h3>
+                <p>Because this is a static site, we use GitHub Comments to save data.</p>
+                <ol style="padding-left: 20px; color: #c9d1d9;">
+                    <li>Set your preferences above.</li>
+                    <li>Click <strong>"Generate Vote"</strong> below.</li>
+                    <li>Paste the copied text as a comment on the <a id="comment-link" href="#" target="_blank">GitHub Issue</a>.</li>
+                </ol>
+                <button class="copy-btn" onclick="generateVoteBlob()">Generate Vote & Open GitHub</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- State & Helpers ---
+    let CONFIG = { repo: '', issue: '' };
+    let MEETING_DATA = null;
+    let COMMENTS_DATA = [];
+    let NEW_SLOTS = [];
+
+    // Tries to load config from URL params or LocalStorage
+    function init() {
+        const params = new URLSearchParams(window.location.search);
+        
+        if (params.has('repo') && params.has('issue')) {
+            CONFIG.repo = params.get('repo');
+            CONFIG.issue = params.get('issue');
+            loadMeeting();
+        } else {
+            document.getElementById('setup-ui').classList.remove('hidden');
+        }
+    }
+
+    function saveConfig() {
+        const repo = document.getElementById('repo-input').value;
+        const issue = document.getElementById('issue-input').value;
+        if (repo && issue) {
+            window.location.search = `?repo=${repo}&issue=${issue}`;
+        }
+    }
+
+    // --- API Interaction ---
+    async function loadMeeting() {
+        document.getElementById('setup-ui').classList.add('hidden');
+        document.getElementById('meeting-ui').classList.remove('hidden');
+        
+        const apiUrl = `https://api.github.com/repos/${CONFIG.repo}/issues/${CONFIG.issue}`;
+        
+        try {
+            // 1. Fetch Issue (The Meeting Config)
+            const issueRes = await fetch(apiUrl);
+            if (!issueRes.ok) throw new Error("Could not find issue. Check repo/issue #.");
+            const issue = await issueRes.json();
+            
+            // Parse Body for or raw JSON block
+            // We look for a code block containing the JSON
+            const jsonMatch = issue.body.match(/```json:meeting([\s\S]*?)```/) || issue.body.match(/```json([\s\S]*?)```/) || [null, issue.body];
+            try {
+                MEETING_DATA = JSON.parse(jsonMatch[1]);
+            } catch (e) {
+                console.error(e);
+                alert("Error parsing Meeting JSON from Issue Body. Make sure it's valid JSON inside a code block.");
+                return;
+            }
+
+            document.getElementById('m-title').innerText = MEETING_DATA.title || issue.title;
+            document.getElementById('m-author').innerText = "Created by " + issue.user.login;
+            document.getElementById('issue-link').href = issue.html_url;
+            document.getElementById('comment-link').href = issue.html_url;
+
+            // 2. Fetch Comments (The Votes)
+            const commentsRes = await fetch(apiUrl + '/comments?per_page=100');
+            const comments = await commentsRes.json();
+            
+            COMMENTS_DATA = comments.map(c => {
+                const match = c.body.match(/```json:vote([\s\S]*?)```/);
+                if (match) {
+                    try { return JSON.parse(match[1]); } catch(e) { return null; }
+                }
+                return null;
+            }).filter(x => x);
+
+            renderHeatmap();
+            renderVotingUI();
+
+        } catch (err) {
+            alert("Error: " + err.message + "\n(Note: API Rate limit is 60/hr for unauthenticated IP)");
+        }
+    }
+
+    // --- Rendering ---
+    const formatTime = (iso) => new Date(iso).toLocaleString(undefined, { 
+        weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' 
+    });
+
+    function renderHeatmap() {
+        const container = document.getElementById('heatmap-list');
+        
+        // Calculate scores
+        const scored = MEETING_DATA.slots.map(slot => {
+            let score = 0, yes = 0, maybe = 0, no = 0;
+            COMMENTS_DATA.forEach(vote => {
+                const val = vote.votes[slot.id];
+                if (val === 2) { score += 2; yes++; }
+                else if (val === 1) { score += 1; maybe++; }
+                else if (val === 0) { score = -10; no++; } // Strong penalty for No
+            });
+            return { ...slot, score, yes, maybe, no };
+        }).sort((a,b) => b.score - a.score);
+
+        container.innerHTML = scored.map(s => {
+            const scoreClass = s.score > 0 ? 'high-score' : (s.score === 0 ? 'med-score' : 'low-score');
+            return `
+            <div class="slot-row">
+                <div>
+                    <div style="font-weight:600; font-size: 1.1em;">${formatTime(s.iso)}</div>
+                    <div style="font-size: 0.85em; color: #8b949e; margin-top:4px;">
+                        <span style="color:#7ee787">${s.yes} Yes</span> • 
+                        <span style="color:#d29922">${s.maybe} Maybe</span> • 
+                        <span style="color:#ff7b72">${s.no} No</span>
+                    </div>
+                </div>
+                <div class="score-box ${scoreClass}">${s.score}</div>
+            </div>`;
+        }).join('');
+    }
+
+    let userVotes = {};
+
+    function renderVotingUI() {
+        const container = document.getElementById('voting-list');
+        
+        // Sort voting list chronologically for easier reading
+        const chronoSlots = [...MEETING_DATA.slots].sort((a,b) => a.iso.localeCompare(b.iso));
+        
+        // Initialize defaults
+        chronoSlots.forEach(s => { if(userVotes[s.id] === undefined) userVotes[s.id] = 2; });
+
+        container.innerHTML = chronoSlots.map(s => `
+            <div class="slot-row">
+                <span>${formatTime(s.iso)}</span>
+                <div class="vote-group">
+                    <div class="vote-opt ${userVotes[s.id]===2?'active':''}" onclick="setVote('${s.id}', 2)">Yes</div>
+                    <div class="vote-opt ${userVotes[s.id]===1?'active':''}" onclick="setVote('${s.id}', 1)">If need be</div>
+                    <div class="vote-opt ${userVotes[s.id]===0?'active':''}" onclick="setVote('${s.id}', 0)">No</div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    window.setVote = (id, val) => {
+        userVotes[id] = val;
+        renderVotingUI();
+    };
+
+    // --- Output Generators ---
+    window.generateVoteBlob = () => {
+        const name = document.getElementById('voter-name').value;
+        if (!name) return alert("Please enter your name.");
+        
+        const payload = { name: name, votes: userVotes, timestamp: new Date().toISOString() };
+        const text = "Vote for " + name + ":\n```json:vote\n" + JSON.stringify(payload) + "\n```";
+        
+        navigator.clipboard.writeText(text).then(() => {
+            alert("Vote copied to clipboard! \n\nRedirecting to GitHub Issue...\nPaste your vote as a new comment.");
+            window.open(document.getElementById('comment-link').href + "#new_comment_field", '_blank');
+        });
+    };
+
+    // --- Creator Tools ---
+    window.toggleCreator = () => document.getElementById('creator-ui').classList.toggle('hidden');
+    
+    window.addSlot = () => {
+        const val = document.getElementById('new-slot-picker').value;
+        if(val) {
+            NEW_SLOTS.push({ iso: new Date(val).toISOString(), id: Math.random().toString(36).substr(2,6) });
+            updateCreatorJson();
+        }
+    };
+
+    function updateCreatorJson() {
+        const list = document.getElementById('new-slot-list');
+        list.innerHTML = NEW_SLOTS.map(s => `<li>${s.iso}</li>`).join('');
+        
+        const config = { title: "New Meeting", slots: NEW_SLOTS };
+        const text = "```json:meeting\n" + JSON.stringify(config, null, 2) + "\n```";
+        document.getElementById('json-output').innerText = text;
+    }
+
+    window.copyConfig = () => {
+        navigator.clipboard.writeText(document.getElementById('json-output').innerText);
+        alert("Config copied! Now create a new GitHub Issue and paste this in the body.");
+    };
+
+    init();
+
+</script>
+</body>
+</html>
